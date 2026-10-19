@@ -1,4 +1,3 @@
-
 import mongoose from "mongoose";
 import User from "../models/User.js";
 import Role from "../models/Role.js";
@@ -12,12 +11,7 @@ const PRIVACY_POLICY_VERSION = "v1";
 export const registerCustomer = async (req, res) => {
   const { uid, mobile } = req.firebaseUser;
 
-  const {
-    name,
-    email,
-    acceptedTerms,
-    acceptedPrivacy,
-  } = req.body;
+  const { name, email, acceptedTerms, acceptedPrivacy } = req.body;
 
   // Validate customer-provided details.
   const fields = {};
@@ -61,10 +55,7 @@ export const registerCustomer = async (req, res) => {
     await session.withTransaction(async () => {
       // Check whether this Firebase identity or mobile already exists.
       const existingUser = await User.findOne({
-        $or: [
-          { firebase_uid: uid },
-          { mobile },
-        ],
+        $or: [{ firebase_uid: uid }, { mobile }],
       }).session(session);
 
       if (existingUser) {
@@ -99,7 +90,7 @@ export const registerCustomer = async (req, res) => {
             is_active: true,
           },
         ],
-        { session }
+        { session },
       );
 
       // Create the associated customer profile.
@@ -109,7 +100,7 @@ export const registerCustomer = async (req, res) => {
             userId: user._id,
           },
         ],
-        { session }
+        { session },
       );
 
       // Record the customer's explicit policy acknowledgements.
@@ -130,7 +121,10 @@ export const registerCustomer = async (req, res) => {
             source: "WEB",
           },
         ],
-        { session }
+        {
+          session,
+          ordered: true,
+        },
       );
 
       registeredUser = {
@@ -151,6 +145,12 @@ export const registerCustomer = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error("Customer registration error details:");
+    console.error("Name:", error.name);
+    console.error("Message:", error.message);
+    console.error("Code:", error.code);
+    console.error("Stack:", error.stack);
+
     if (error.code === "ACCOUNT_ALREADY_EXISTS" || error.code === 11000) {
       return sendError(res, {
         statusCode: 409,
