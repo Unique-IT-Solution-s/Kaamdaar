@@ -1,4 +1,3 @@
-
 import User from "../models/User.js";
 import { sendSuccess, sendError } from "../utils/apiResponse.js";
 
@@ -7,9 +6,12 @@ export const continueAfterVerification = async (req, res) => {
     // These values come from the verified Firebase ID token.
     const { uid, mobile } = req.firebaseUser;
 
-    const user = await User.findOne({ mobile }).select(
-      "_id firebase_uid user_type is_active"
-    );
+    // console.log("Verified Firebase UID:", uid);
+    // console.log("Verified mobile:", mobile);
+
+    const user = await User.findOne({
+      $or: [{ mobile }, { firebase_uid: uid }],
+    }).select("_id mobile firebase_uid user_type is_active");
 
     // No account exists for this verified mobile.
     if (!user) {
@@ -22,8 +24,14 @@ export const continueAfterVerification = async (req, res) => {
       });
     }
 
+    else {
     // Do not silently link an account to another Firebase identity.
-    if (!user.firebase_uid || user.firebase_uid !== uid) {
+    // console.log("user.mobile", user.mobile )
+    // console.log("user.mobile", mobile )
+    // console.log("user.firebase_uid", user.firebase_uid)
+    // console.log("user.firebase_uid", uid)
+
+    if (user.mobile !== mobile || user.firebase_uid !== uid) {
       return sendError(res, {
         statusCode: 409,
         code: "IDENTITY_MISMATCH",
@@ -48,6 +56,7 @@ export const continueAfterVerification = async (req, res) => {
       });
     }
 
+
     return sendSuccess(res, {
       statusCode: 200,
       message: "Continue with customer login.",
@@ -55,11 +64,12 @@ export const continueAfterVerification = async (req, res) => {
         next_step: "LOGIN",
       },
     });
+}
   } catch (error) {
     console.error(
       "Continue after verification failed:",
       error.name,
-      error.message
+      error.message,
     );
 
     return sendError(res, {

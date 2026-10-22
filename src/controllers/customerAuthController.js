@@ -5,6 +5,10 @@ import CustomerProfile from "../models/CustomerProfile.js";
 import UserConsent from "../models/UserConsent.js";
 import { sendSuccess, sendError } from "../utils/apiResponse.js";
 
+import { randomBytes, createHash } from "node:crypto";
+import jwt from "jsonwebtoken";
+import UserSession from "../models/UserSession.js";
+
 const TERMS_POLICY_VERSION = "v1";
 const PRIVACY_POLICY_VERSION = "v1";
 
@@ -44,6 +48,16 @@ export const registerCustomer = async (req, res) => {
     });
   }
 
+  const accessSecret = process.env.JWT_ACCESS_SECRET;
+
+  if (!accessSecret) {
+    return sendError(res, {
+      statusCode: 500,
+      code: "AUTH_CONFIGURATION_ERROR",
+      message: "Authentication is not configured.",
+    });
+  }
+
   const normalizedName = name.trim();
   const normalizedEmail = email.trim().toLowerCase();
 
@@ -51,6 +65,15 @@ export const registerCustomer = async (req, res) => {
 
   try {
     let registeredUser;
+    let accessToken;
+
+    const refreshToken = randomBytes(48).toString("hex");
+
+    const refreshTokenHash = createHash("sha256")
+      .update(refreshToken)
+      .digest("hex");
+
+    const refreshExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
     await session.withTransaction(async () => {
       // Check whether this Firebase identity or mobile already exists.
@@ -93,6 +116,8 @@ export const registerCustomer = async (req, res) => {
         { session },
       );
 
+      //   console.log("user : ", user)
+
       // Create the associated customer profile.
       await CustomerProfile.create(
         [
@@ -127,6 +152,33 @@ export const registerCustomer = async (req, res) => {
         },
       );
 
+      const [userSession] = await UserSession.create(
+        [
+          {
+            user_id: user._id,
+            refresh_token_hash: refreshTokenHash,
+            device_name:
+              typeof req.body?.deviceName === "string"
+                ? req.body.deviceName.trim().slice(0, 100)
+                : "Web Browser",
+            platform: "WEB",
+            expires_at: refreshExpiresAt,
+            last_used_at: new Date(),
+          },
+        ],
+        { session },
+      );
+
+      accessToken = jwt.sign(
+        {
+          sub: user._id.toString(),
+          role: "CUSTOMER",
+          sessionId: userSession._id.toString(),
+        },
+        accessSecret,
+        { expiresIn: "15m" },
+      );
+
       registeredUser = {
         id: user._id,
         name: user.name,
@@ -136,10 +188,21 @@ export const registerCustomer = async (req, res) => {
       };
     });
 
+    res.cookie("kaamdaar_refresh", refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/api/v1/auth",
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+    });
+
     return sendSuccess(res, {
       statusCode: 201,
       message: "Customer registered successfully.",
       data: {
+        accessToken,
+        tokenType: "Bearer",
+        expiresIn: 900,
         customer: registeredUser,
         next_step: "ADD_ADDRESS_OR_HOME",
       },
