@@ -1,0 +1,9 @@
+
+# Kaamdaar CODEOWNERS
+
+# Default reviewer
+* @lyonsworld2026
+
+# Backend and API
+/server.js @dineshjangir012000-dot
+/src/ @dineshjangir012000-dot
