@@ -3,18 +3,29 @@ import { sendSuccess, sendError } from "../utils/apiResponse.js";
 
 export const continueAfterVerification = async (req, res) => {
   try {
-    // These values come from the verified Firebase ID token.
-    const { uid, mobile } = req.firebaseUser;
+    // These values must come from the verified Firebase ID token.
+    const { uid, mobile } = req.firebaseUser || {};
 
-    // console.log("Verified Firebase UID:", uid);
-    // console.log("Verified mobile:", mobile);
+    if (!uid || !mobile) {
+      return sendError(res, {
+        statusCode: 401,
+        code: "VERIFIED_IDENTITY_MISSING",
+        message: "A verified Firebase phone identity is required.",
+      });
+    }
 
-    const user = await User.findOne({
-      $or: [{ mobile }, { firebase_uid: uid }],
+    // Look up the account associated with this verified mobile number.
+    const userByMobile = await User.findOne({ mobile }).select(
+      "_id mobile firebase_uid user_type is_active",
+    );
+
+    // Also look up the account associated with this Firebase UID.
+    const userByFirebaseUid = await User.findOne({
+      firebase_uid: uid,
     }).select("_id mobile firebase_uid user_type is_active");
 
-    // No account exists for this verified mobile.
-    if (!user) {
+    // Neither identity is associated with an existing account.
+    if (!userByMobile && !userByFirebaseUid) {
       return sendSuccess(res, {
         statusCode: 200,
         message: "Continue with customer registration.",
@@ -24,19 +35,45 @@ export const continueAfterVerification = async (req, res) => {
       });
     }
 
-    else {
-    // Do not silently link an account to another Firebase identity.
-    // console.log("user.mobile", user.mobile )
-    // console.log("user.mobile", mobile )
-    // console.log("user.firebase_uid", user.firebase_uid)
-    // console.log("user.firebase_uid", uid)
-
-    if (user.mobile !== mobile || user.firebase_uid !== uid) {
+    // The verified mobile and Firebase UID point to different accounts.
+    if (
+      userByMobile &&
+      userByFirebaseUid &&
+      userByMobile._id.toString() !== userByFirebaseUid._id.toString()
+    ) {
       return sendError(res, {
         statusCode: 409,
         code: "IDENTITY_MISMATCH",
         message:
-          "This account cannot be linked to the verified identity. Please contact support.",
+          "The verified phone number and Firebase identity belong to different accounts.",
+      });
+    }
+
+    // Prefer the account found through the verified mobile.
+    const user = userByMobile || userByFirebaseUid;
+
+    // console.log("user mobile", user.mobile);
+    // console.log("user uid", user.firebase_uid);
+    // console.log("mobile", mobile);
+    // console.log("uid", uid);
+
+    // Require the stored phone number to match the verified phone.
+    if (user.mobile !== mobile) {
+      return sendError(res, {
+        statusCode: 409,
+        code: "MOBILE_MISMATCH",
+        message:
+          "The verified phone number does not match the existing account.",
+      });
+    }
+
+    // Require the stored Firebase UID to match the verified Firebase UID.
+    if (user.firebase_uid !== uid) {
+      return sendError(res, {
+        statusCode: 409,
+        code: "FIREBASE_UID_MISMATCH",
+        message:
+          "The verified Firebase identity is not linked to this account.",
       });
     }
 
@@ -56,7 +93,6 @@ export const continueAfterVerification = async (req, res) => {
       });
     }
 
-
     return sendSuccess(res, {
       statusCode: 200,
       message: "Continue with customer login.",
@@ -64,7 +100,6 @@ export const continueAfterVerification = async (req, res) => {
         next_step: "LOGIN",
       },
     });
-}
   } catch (error) {
     console.error(
       "Continue after verification failed:",

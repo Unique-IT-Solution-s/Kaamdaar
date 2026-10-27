@@ -15,6 +15,9 @@ const PRIVACY_POLICY_VERSION = "v1";
 export const registerCustomer = async (req, res) => {
   const { uid, mobile } = req.firebaseUser;
 
+  console.log("firebase uid:", uid);
+  console.log("firebase mobile", mobile);
+
   const { name, email, acceptedTerms, acceptedPrivacy } = req.body;
 
   // Validate customer-provided details.
@@ -86,6 +89,17 @@ export const registerCustomer = async (req, res) => {
         error.code = "ACCOUNT_ALREADY_EXISTS";
         throw error;
       }
+
+      //   if (existingUser) {
+      //     console.log("Existing user found:", {
+      //       userId: existingUser._id.toString(),
+      //       firebase_uid: existingUser.firebase_uid,
+      //       mobile: existingUser.mobile,
+      //       user_type: existingUser.user_type,
+      //     });
+      //   }
+      //   console.log(existingUser.firebase_uid)
+      //   console.log(existingUser.mobile)
 
       // Find the pre-seeded CUSTOMER role.
       const customerRole = await Role.findOne({
@@ -240,5 +254,38 @@ export const registerCustomer = async (req, res) => {
     });
   } finally {
     await session.endSession();
+  }
+};
+
+export const getCustomerProfile = async (req, res) => {
+  try {
+    const userId = req.user.id
+    
+    const customer = await User.findOne({_id : userId, user_type: "CUSTOMER",}).select("name email mobile user_type mobile_verified email_verified is_active createdAt").lean()
+
+    if(!customer){
+        return res.status(404).json({
+            success : false ,
+            message : "customer profile not found"
+        })
+    }
+
+    const profile = await CustomerProfile.findOne({userId : customer.userId})
+
+    return sendSuccess(res, {
+      statusCode: 200,
+      message: "Customer profile fetched successfully.",
+      data: {
+        customer,
+        profile: profile || {},
+      },
+    });
+    
+  } catch (error) {
+    console.error("Get customer profile error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch customer profile",
+    });
   }
 };
