@@ -1,7 +1,8 @@
 import jwt from "jsonwebtoken";
 import { sendError } from "../utils/apiResponse.js";
+import UserSession from "../models/UserSession.js";
 
-export const verifyAccessToken = (req, res, next) => {
+export const verifyAccessToken = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
@@ -18,14 +19,39 @@ export const verifyAccessToken = (req, res, next) => {
     const token = authHeader.split(" ")[1];
 
     // Verify the signature and expiration
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_ACCESS_SECRET
-    );
+    const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET);
+
+    if (
+      typeof decoded._id !== "string" ||
+      !/^[0-9a-fA-F]{24}$/.test(decoded._id) ||
+      typeof decoded.sessionId !== "string" ||
+      !/^[0-9a-fA-F]{24}$/.test(decoded.sessionId)
+    ) {
+      return sendError(res, {
+        statusCode: 401,
+        code: "INVALID_ACCESS_TOKEN",
+        message: "Invalid authentication token.",
+      });
+    }
+
+    // Verify that this session still exists and belongs to the user.
+    const activeSession = await UserSession.findOne({
+      _id: decoded.sessionId,
+      user_id: decoded._id,
+      expires_at: { $gt: new Date() },                    //$gt means = greater than
+    }).select("_id");
+
+    if (!activeSession) {
+      return sendError(res, {
+        statusCode: 401,
+        code: "SESSION_EXPIRED_OR_REVOKED",
+        message: "Your session has expired or you have logged out.",
+      });
+    }
 
     // Make the verified token data available to controllers
     req.user = {
-      id: decoded.sub,
+      id: decoded._id,
       role: decoded.role,
       sessionId: decoded.sessionId,
     };
@@ -40,7 +66,8 @@ export const verifyAccessToken = (req, res, next) => {
       return sendError(res, {
         statusCode: 401,
         code: "INVALID_OR_EXPIRED_ACCESS_TOKEN",
-        message: "Your session has expired or your token is invalid. Please log in again.",
+        message:
+          "Your session has expired or your token is invalid. Please log in again.",
       });
     }
 

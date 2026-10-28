@@ -55,12 +55,7 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
-
-    profile_image: {
-      type: String,
-      default: null,
-    },
-
+    
     language: {
       type: String,
       default: "en",
@@ -70,6 +65,16 @@ const userSchema = new mongoose.Schema(
       unique: true,
       sparse: true,
       trim: true,
+    },
+    profile_image: {
+      url: {
+        type: String,
+        default: null,
+      },
+      public_id: {
+        type: String,
+        default: null,
+      },
     },
   },
   { timestamps: true },

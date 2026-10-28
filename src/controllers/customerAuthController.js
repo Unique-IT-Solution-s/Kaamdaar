@@ -185,7 +185,7 @@ export const registerCustomer = async (req, res) => {
 
       accessToken = jwt.sign(
         {
-          sub: user._id.toString(),
+          _id: user._id.toString(),
           role: "CUSTOMER",
           sessionId: userSession._id.toString(),
         },
@@ -259,18 +259,22 @@ export const registerCustomer = async (req, res) => {
 
 export const getCustomerProfile = async (req, res) => {
   try {
-    const userId = req.user.id
-    
-    const customer = await User.findOne({_id : userId, user_type: "CUSTOMER",}).select("name email mobile user_type mobile_verified email_verified is_active createdAt").lean()
+    const userId = req.user?.id;
 
-    if(!customer){
-        return res.status(404).json({
-            success : false ,
-            message : "customer profile not found"
-        })
+    const customer = await User.findOne({ _id: userId, user_type: "CUSTOMER" })
+      .select(
+        "name email mobile user_type mobile_verified email_verified is_active createdAt",
+      )
+      .lean();
+
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "customer profile not found",
+      });
     }
 
-    const profile = await CustomerProfile.findOne({userId : customer.userId})
+    const profile = await CustomerProfile.findOne({ userId: customer.userId });
 
     return sendSuccess(res, {
       statusCode: 200,
@@ -280,12 +284,307 @@ export const getCustomerProfile = async (req, res) => {
         profile: profile || {},
       },
     });
-    
   } catch (error) {
     console.error("Get customer profile error:", error);
     return res.status(500).json({
       success: false,
       message: "Failed to fetch customer profile",
+    });
+  }
+};
+
+export const updateCustomerProfile = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+
+    const {
+      name,
+      email,
+      mobile,
+      user_type,
+      role_id,
+      dateOfBirth,
+      gender,
+      preferences,
+      loyaltyPoints,
+      totalBookings,
+      totalSpent,
+      isBlocked,
+    } = req.body;
+
+    // Fields that customers are not allowed to change.
+    if (
+      email !== undefined ||
+      mobile !== undefined ||
+      user_type !== undefined ||
+      role_id !== undefined ||
+      loyaltyPoints !== undefined ||
+      totalBookings !== undefined ||
+      totalSpent !== undefined ||
+      isBlocked !== undefined
+    ) {
+      return sendError(res, {
+        statusCode: 400,
+        code: "FIELDS_NOT_ALLOWED",
+        message:
+          "Email, mobile number, account role, and system-managed fields cannot be updated.",
+      });
+    }
+
+    // Validate the name if provided.
+    if (
+      name !== undefined &&
+      (typeof name !== "string" || name.trim().length < 2)
+    ) {
+      return sendError(res, {
+        statusCode: 422,
+        code: "INVALID_NAME",
+        message: "Name must contain at least 2 characters.",
+      });
+    }
+
+    // Validate gender if provided.
+    // Adjust these values to match your actual schema enum.
+    if (gender !== undefined && !["MALE", "FEMALE", "OTHER"].includes(gender)) {
+      return sendError(res, {
+        statusCode: 422,
+        code: "INVALID_GENDER",
+        message: "Please provide a valid gender.",
+      });
+    }
+
+    // Validate preferences if provided.
+    if (
+      preferences !== undefined &&
+      (preferences === null ||
+        typeof preferences !== "object" ||
+        Array.isArray(preferences))
+    ) {
+      return sendError(res, {
+        statusCode: 422,
+        code: "INVALID_PREFERENCES",
+        message: "Preferences must be an object.",
+      });
+    }
+
+    // Build an allowlisted update object.
+    const userUpdates = {};
+
+    if (name !== undefined) {
+      userUpdates.name = name.trim();
+    }
+
+    const profileUpdates = {};
+
+    if (dateOfBirth !== undefined) {
+      if (dateOfBirth === null || dateOfBirth === "") {
+        profileUpdates.dateOfBirth = null;
+      } else {
+        const parsedDate = new Date(dateOfBirth);
+
+        if (Number.isNaN(parsedDate.getTime())) {
+          return sendError(res, {
+            statusCode: 422,
+            code: "INVALID_DATE_OF_BIRTH",
+            message: "Please provide a valid date of birth.",
+          });
+        }
+
+        if (parsedDate > new Date()) {
+          return sendError(res, {
+            statusCode: 422,
+            code: "INVALID_DATE_OF_BIRTH",
+            message: "Date of birth cannot be in the future.",
+          });
+        }
+
+        profileUpdates.dateOfBirth = parsedDate;
+      }
+    }
+
+    if (gender !== undefined) {
+      profileUpdates.gender = gender;
+    }
+
+    // Only permit the known preference fields.
+    if (preferences !== undefined) {
+      const allowedPreferenceKeys = ["notificationsEnabled", "language"];
+
+      const invalidKeys = Object.keys(preferences).filter(
+        (key) => !allowedPreferenceKeys.includes(key),
+      );
+
+      if (invalidKeys.length > 0) {
+        return sendError(res, {
+          statusCode: 400,
+          code: "INVALID_PREFERENCE_FIELDS",
+          message: "One or more preference fields cannot be updated.",
+        });
+      }
+
+      for (const [key, value] of Object.entries(preferences)) {
+        if (key === "notificationsEnabled" && typeof value !== "boolean") {
+          return sendError(res, {
+            statusCode: 422,
+            code: "INVALID_PREFERENCES",
+            message: "notificationsEnabled must be true or false.",
+          });
+        }
+
+        if (
+          key === "language" &&
+          (typeof value !== "string" || value.trim().length === 0)
+        ) {
+          return sendError(res, {
+            statusCode: 422,
+            code: "INVALID_PREFERENCES",
+            message: "language must be a non-empty string.",
+          });
+        }
+
+        profileUpdates[`preferences.${key}`] =
+          key === "language" ? value.trim() : value;
+      }
+    }
+
+    if (
+      Object.keys(userUpdates).length === 0 &&
+      Object.keys(profileUpdates).length === 0
+    ) {
+      return sendError(res, {
+        statusCode: 400,
+        code: "NO_VALID_FIELDS",
+        message: "Please provide at least one editable field.",
+      });
+    }
+
+    // Confirm that the authenticated user is a customer.
+    const customer = await User.findOne({
+      _id: userId,
+      user_type: "CUSTOMER",
+      is_active: true,
+    });
+
+    if (!customer) {
+      return sendError(res, {
+        statusCode: 404,
+        code: "CUSTOMER_NOT_FOUND",
+        message: "Customer not found or account is inactive.",
+      });
+    }
+
+    // Update the user's editable details.
+    if (Object.keys(userUpdates).length > 0) {
+      await User.updateOne(
+        { _id: userId, user_type: "CUSTOMER" },
+        { $set: userUpdates },
+        { runValidators: true },
+      );
+    }
+
+    // Update the customer's additional profile details.
+    if (Object.keys(profileUpdates).length > 0) {
+      const updatedProfile = await CustomerProfile.findOneAndUpdate(
+        { userId },
+        { $set: profileUpdates },
+        {
+          new: true,
+          runValidators: true,
+        },
+      );
+
+      if (!updatedProfile) {
+        return sendError(res, {
+          statusCode: 404,
+          code: "CUSTOMER_PROFILE_NOT_FOUND",
+          message: "Customer profile record not found.",
+        });
+      }
+    }
+
+    // Fetch the latest data for the response.
+    const updatedCustomer = await User.findById(userId)
+      .select(
+        "name email mobile user_type mobile_verified email_verified is_active createdAt",
+      )
+      .lean();
+
+    const updatedCustomerProfile = await CustomerProfile.findOne({
+      userId,
+    }).lean();
+
+    return sendSuccess(res, {
+      statusCode: 200,
+      message: "Customer profile updated successfully.",
+      data: {
+        customer: updatedCustomer,
+        profile: updatedCustomerProfile || {},
+      },
+    });
+  } catch (error) {
+    console.error("update customer profile error:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update customer profile",
+    });
+  }
+};
+
+export const logoutCustomer = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const sessionId = req.user?.sessionId;
+
+    // Validate the authenticated customer ID.
+    if (typeof userId !== "string" || !/^[0-9a-fA-F]{24}$/.test(userId)) {
+      return sendError(res, {
+        statusCode: 400,
+        code: "INVALID_CUSTOMER_ID",
+        message: "Invalid customer ID.",
+      });
+    }
+
+    // Validate the session ID from the verified access token.
+    if (typeof sessionId !== "string" || !/^[0-9a-fA-F]{24}$/.test(sessionId)) {
+      return sendError(res, {
+        statusCode: 400,
+        code: "INVALID_SESSION_ID",
+        message: "Invalid session ID.",
+      });
+    }
+
+    // Delete only the current customer's current session.
+    const deletedSession = await UserSession.deleteOne({
+      _id: sessionId,
+      user_id: userId,
+    });
+
+    // Clear the refresh-token cookie.
+    res.clearCookie("kaamdaar_refresh", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/api/v1/auth",
+    });
+
+    if (deletedSession.deletedCount === 0) {
+      return sendSuccess(res, {
+        statusCode: 200,
+        message: "Customer is already logged out.",
+        data: null,
+      });
+    }
+
+    return sendSuccess(res, {
+      statusCode: 200,
+      message: "Customer logged out successfully.",
+      data: null,
+    });
+  } catch (error) {
+    console.error("log out customer profile error:", error.message);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to logout customer profile",
     });
   }
 };
